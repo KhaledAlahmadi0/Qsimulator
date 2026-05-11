@@ -19,13 +19,23 @@ from backend import (
 
 st.set_page_config(page_title="Quantum Circuit Simulator", layout="wide")
 st.title("Quantum Circuit Simulator")
+st.markdown(
+    "An interactive simulator for designing and running quantum circuits. "
+    "Build circuits using standard quantum gates, export to OpenQASM 2.0, "
+    "and execute code across multiple quantum frameworks — all in your browser."
+)
+st.caption("by Khaled Alahmadi · COE619 · King Fahd University of Petroleum & Minerals")
 
 tab1, tab2, tab3, tab4 = st.tabs(["Simulate", "QASM", "Code Runner", "Generate Code"])
 
 # ── Tab 1: Simulate ──────────────────────────────────────────────────────────
 with tab1:
     st.subheader("Circuit Simulation")
-    st.markdown("Enter your circuit in the custom text format (one qubit per line, gates separated by `-`).")
+    st.markdown(
+        "Simulate a quantum circuit using the built-in state-vector engine or PennyLane. "
+        "Enter your circuit in the custom text format: **one qubit per line**, gates separated by `-`. "
+        "Use `I` for identity (no gate). Example: `H-I` applies Hadamard to qubit 0 in moment 1, identity in moment 2."
+    )
 
     circuit_input = st.text_area(
         "Circuit Input",
@@ -92,7 +102,10 @@ with tab1:
 # ── Tab 2: QASM ───────────────────────────────────────────────────────────────
 with tab2:
     st.subheader("Generate QASM")
-    st.markdown("Convert your circuit to OpenQASM 2.0 format.")
+    st.markdown(
+        "Convert your circuit to **OpenQASM 2.0** — the standard open quantum assembly language. "
+        "The generated QASM code can be imported into IBM Quantum, Qiskit, PennyLane, and other compatible tools."
+    )
 
     qasm_circuit = st.text_area(
         "Circuit Input",
@@ -113,7 +126,11 @@ with tab2:
 # ── Tab 3: Code Runner ────────────────────────────────────────────────────────
 with tab3:
     st.subheader("Python Code Runner")
-    st.markdown("Run Qiskit, Cirq, Braket, or PennyLane code.")
+    st.markdown(
+        "Write and execute quantum code directly in the browser using your framework of choice. "
+        "Select a framework below to load a working Bell-state example, then modify and run it. "
+        "Measurement counts are automatically plotted as a bar chart when available."
+    )
 
     EXAMPLES = {
         "Qiskit": """\
@@ -260,7 +277,11 @@ for i, (amp, p) in enumerate(zip(state, probs)):
 # ── Tab 4: Generate Code ──────────────────────────────────────────────────────
 with tab4:
     st.subheader("Generate Framework Code")
-    st.markdown("Convert a QASM circuit into framework-specific Python code.")
+    st.markdown(
+        "Paste any valid **OpenQASM 2.0** circuit and instantly generate ready-to-run Python code "
+        "for your target framework. Useful for porting circuits between tools or learning how different "
+        "frameworks express the same quantum operations."
+    )
 
     qasm_for_gen = st.text_area(
         "QASM Input",
@@ -293,8 +314,22 @@ with tab4:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("About")
-    st.markdown("Quantum Circuit Simulator — COE619")
-    st.markdown("Supports: H, X, Y, Z, T, S, CNOT, SWAP, RX/RY/RZ, CRX/CRY/CRZ, Unitary gates")
+    st.markdown("**Quantum Circuit Simulator**")
+    st.markdown("COE619 — Quantum Computing")
+    st.markdown("King Fahd University of Petroleum & Minerals")
+    st.markdown("**by Khaled Alahmadi**")
+    st.markdown("---")
+    st.markdown("**Supported Gates**")
+    st.markdown(
+        "| Type | Gates |\n"
+        "|------|-------|\n"
+        "| Single-qubit | H, X, Y, Z, S, T, I |\n"
+        "| Phase | S†, T†, P |\n"
+        "| Rotation | RX, RY, RZ |\n"
+        "| Two-qubit | CNOT, CZ, CY, CH, SWAP |\n"
+        "| Controlled | CRX, CRY, CRZ |\n"
+        "| Unitary | U, U1, U2 |"
+    )
     st.markdown("---")
     st.markdown("**Run locally:**")
     st.code("streamlit run streamlit_app.py", language="bash")
