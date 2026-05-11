@@ -26,7 +26,9 @@ st.markdown(
 )
 st.caption("by Khaled Alahmadi · COE619 · King Fahd University of Petroleum & Minerals")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Simulate", "QASM", "Code Runner", "Generate Code"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    ["Simulate", "QASM", "Code Runner", "Generate Code", "🎛 Visual Editor"]
+)
 
 # ── Tab 1: Simulate ──────────────────────────────────────────────────────────
 with tab1:
@@ -64,12 +66,8 @@ with tab1:
 
                 circuit = parse_circuit(circuit_input)
                 num_wires = len(circuit)
-
-                # Get state vector via the native backend simulator
                 state = apply_circuit(circuit)
-                probs = np.abs(state) ** 2
 
-                # Wrap in a PennyLane QubitStateVector circuit to get qml.state()
                 dev = qml.device("default.qubit", wires=num_wires)
 
                 @qml.qnode(dev)
@@ -215,12 +213,8 @@ for i, (amp, p) in enumerate(zip(state, probs)):
     runner_fw = st.selectbox("Framework", list(EXAMPLES.keys()), key="runner_fw")
 
     if EXAMPLES[runner_fw] is None:
-        st.warning("CUDA-Q requires a local GPU environment with CUDA installed and cannot run on Streamlit Cloud. Generate the code below and run it locally.")
+        st.warning("CUDA-Q requires a local GPU environment with CUDA installed and cannot run on Streamlit Cloud. Generate the code in the Generate Code tab and run it locally.")
     else:
-        if "runner_code" not in st.session_state or st.session_state.get("runner_fw_prev") != runner_fw:
-            st.session_state["runner_code"] = EXAMPLES[runner_fw]
-        st.session_state["runner_fw_prev"] = runner_fw
-
         code_input = st.text_area("Python Code", value=EXAMPLES[runner_fw], height=300, key=f"code_{runner_fw}")
 
         if st.button("Execute", use_container_width=True):
@@ -263,8 +257,8 @@ for i, (amp, p) in enumerate(zip(state, probs)):
                     st.error(f"Process exited with code {proc.returncode}")
 
                 if os.path.exists("counts.json"):
-                    with open("counts.json") as f:
-                        counts = json.load(f)
+                    with open("counts.json") as cf:
+                        counts = json.load(cf)
                     st.subheader("Measurement Counts")
                     st.bar_chart(counts)
                     os.remove("counts.json")
@@ -311,6 +305,308 @@ with tab4:
         except Exception as e:
             st.error(f"Error: {e}")
 
+# ── Tab 5: Visual Editor ──────────────────────────────────────────────────────
+with tab5:
+    st.subheader("Visual Circuit Editor")
+    st.markdown(
+        "Build your circuit visually. **Select a gate** from the palette, then **click a cell** to place it. "
+        "For two-qubit gates (CNOT, CZ, SWAP), click the **first qubit** (control), then the **second qubit** "
+        "(target) in the **same time step**. Use the sliders to configure rotation and unitary gate parameters."
+    )
+
+    # ── Session state init ────────────────────────────────────────────────────
+    if "vc_grid" not in st.session_state:
+        st.session_state.vc_grid = [["I"] * 6 for _ in range(3)]
+    if "vc_pending" not in st.session_state:
+        st.session_state.vc_pending = None   # (qubit, moment) of first click
+    if "vc_selected" not in st.session_state:
+        st.session_state.vc_selected = "H"
+
+    # ── Circuit size controls ─────────────────────────────────────────────────
+    cc1, cc2, cc3, cc4 = st.columns([1, 1, 1, 1])
+    with cc1:
+        nq = st.number_input("Qubits", 1, 6, len(st.session_state.vc_grid), key="vc_nq")
+    with cc2:
+        nm = st.number_input("Moments", 1, 12, len(st.session_state.vc_grid[0]), key="vc_nm")
+    with cc3:
+        if st.button("🗑 Clear", use_container_width=True):
+            st.session_state.vc_grid = [["I"] * int(nm) for _ in range(int(nq))]
+            st.session_state.vc_pending = None
+            st.rerun()
+    with cc4:
+        run_visual = st.button("▶ Run Circuit", use_container_width=True, key="vc_run_btn")
+
+    # Resize grid to match nq/nm
+    grid = st.session_state.vc_grid
+    nq, nm = int(nq), int(nm)
+    while len(grid) < nq:
+        grid.append(["I"] * nm)
+    grid = grid[:nq]
+    for i in range(nq):
+        while len(grid[i]) < nm:
+            grid[i].append("I")
+        grid[i] = grid[i][:nm]
+    st.session_state.vc_grid = grid
+
+    # ── Gate palette ──────────────────────────────────────────────────────────
+    TWO_QUBIT_GATES = {"CNOT", "CZ", "SWAP"}
+    GATE_GROUPS = [
+        ("Single",   ["H", "X", "Y", "Z", "S", "T", "S†", "T†"]),
+        ("Rotation", ["RX", "RY", "RZ"]),
+        ("2-Qubit",  ["CNOT", "CZ", "SWAP"]),
+        ("Unitary",  ["U"]),
+        ("Erase",    ["I"]),
+    ]
+
+    sel = st.session_state.vc_selected
+    st.markdown("#### Gate Palette")
+    for group_label, gates in GATE_GROUPS:
+        pcols = st.columns([0.6] + [0.8] * len(gates) + [10 - len(gates)])
+        pcols[0].markdown(f"<span style='color:#94a3b8;font-size:0.8em'>{group_label}</span>", unsafe_allow_html=True)
+        for gi, g in enumerate(gates):
+            is_sel = g == sel
+            btn_style = "**:violet[" + g + "]**" if is_sel else g
+            if pcols[gi + 1].button(btn_style, key=f"pal_{g}"):
+                st.session_state.vc_selected = g
+                st.session_state.vc_pending = None
+                st.rerun()
+
+    # ── Parameter sliders ─────────────────────────────────────────────────────
+    if sel in ("RX", "RY", "RZ"):
+        rot_angle = st.slider(
+            f"{sel} angle (radians)", -3.14159, 3.14159, 1.5708, 0.01,
+            format="%.4f", key="vc_rot_angle"
+        )
+        st.caption(f"Current: {sel}({rot_angle:.4f} rad  ≈  {np.degrees(rot_angle):.1f}°)")
+    elif sel == "U":
+        sc1, sc2, sc3 = st.columns(3)
+        u_theta = sc1.slider("θ (theta)", 0.0, 6.2832, 1.5708, 0.01, format="%.4f", key="vc_u_theta")
+        u_phi   = sc2.slider("φ (phi)",   0.0, 6.2832, 0.0,    0.01, format="%.4f", key="vc_u_phi")
+        u_lam   = sc3.slider("λ (lambda)", 0.0, 6.2832, 0.0,   0.01, format="%.4f", key="vc_u_lam")
+        st.caption(f"U({u_theta:.3f}, {u_phi:.3f}, {u_lam:.3f})")
+
+    # ── Pending state notice ──────────────────────────────────────────────────
+    pending = st.session_state.vc_pending
+    if pending:
+        st.info(f"🔵 **{sel}** — first qubit set at q{pending[0]}, t{pending[1]+1}. "
+                f"Now click the second qubit in the **same column (t{pending[1]+1})**.")
+
+    # ── Gate visual config ────────────────────────────────────────────────────
+    GATE_COLORS = {
+        "H": "#7c3aed", "X": "#2563eb", "Y": "#0891b2", "Z": "#059669",
+        "S": "#d97706", "T": "#d97706", "S†": "#b45309", "T†": "#b45309",
+        "CNOT_ctrl": "#dc2626", "CNOT_tgt": "#dc2626",
+        "CZ_ctrl": "#9333ea",   "CZ_tgt": "#9333ea",
+        "SWAP_0": "#0284c7",    "SWAP_1": "#0284c7",
+    }
+    GATE_SYMBOLS = {
+        "I": "─", "H": "H", "X": "X", "Y": "Y", "Z": "Z",
+        "S": "S", "T": "T", "S†": "S†", "T†": "T†",
+        "CNOT_ctrl": "●", "CNOT_tgt": "⊕",
+        "CZ_ctrl": "●",   "CZ_tgt": "Z",
+        "SWAP_0": "✕",    "SWAP_1": "✕",
+    }
+
+    def cell_symbol(g):
+        if g.startswith(("RX", "RY", "RZ")):
+            return g[:2]
+        if g.startswith("U("):
+            return "U"
+        return GATE_SYMBOLS.get(g, g[:3])
+
+    def cell_color(g):
+        if g.startswith(("RX", "RY", "RZ")):
+            return "#0369a1"
+        if g.startswith("U("):
+            return "#ea580c"
+        return GATE_COLORS.get(g, "#374151")
+
+    # ── HTML visual circuit display ───────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### Circuit")
+
+    header_cells = ['<th style="width:40px"></th>']
+    for m in range(nm):
+        header_cells.append(
+            f'<th style="text-align:center;color:#64748b;font-size:0.8em;'
+            f'padding:4px 8px;min-width:56px">t{m+1}</th>'
+        )
+    html_rows = [f"<tr>{''.join(header_cells)}</tr>"]
+
+    for q in range(nq):
+        cells = [f'<td style="color:#94a3b8;font-weight:bold;padding:4px 8px;font-size:0.9em">q{q}</td>']
+        for m in range(nm):
+            g = grid[q][m]
+            sym   = cell_symbol(g)
+            color = cell_color(g)
+            is_empty = g == "I"
+            bg     = "#0f172a" if is_empty else f"{color}22"
+            border = "1px solid #1e293b" if is_empty else f"2px solid {color}"
+            glow   = ""
+            if pending and pending == (q, m):
+                border = "2px solid #fbbf24"
+                glow   = "box-shadow:0 0 8px #fbbf2488;"
+            cells.append(
+                f'<td style="text-align:center;padding:6px 4px;">'
+                f'<div style="border:{border};border-radius:6px;'
+                f'background:{bg};color:{color};font-weight:bold;'
+                f'font-size:0.95em;padding:4px 8px;min-width:48px;{glow}">'
+                f'{sym}</div></td>'
+            )
+        # Vertical connector lines between two-qubit gate pairs in the same moment
+        html_rows.append(f"<tr>{''.join(cells)}</tr>")
+
+    st.markdown(
+        f'<div style="overflow-x:auto"><table style="border-collapse:separate;'
+        f'border-spacing:4px 2px;margin-bottom:8px">{"".join(html_rows)}</table></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Interactive button grid ───────────────────────────────────────────────
+    st.markdown("**Click a cell to place the selected gate:**")
+
+    hdr = st.columns([0.5] + [1] * nm)
+    for m in range(nm):
+        hdr[m + 1].markdown(
+            f"<div style='text-align:center;color:#64748b;font-size:0.8em'>t{m+1}</div>",
+            unsafe_allow_html=True,
+        )
+
+    for q in range(nq):
+        row = st.columns([0.5] + [1] * nm)
+        row[0].markdown(f"<div style='padding-top:6px;font-weight:bold'>q{q}</div>", unsafe_allow_html=True)
+        for m in range(nm):
+            g = grid[q][m]
+            sym = cell_symbol(g)
+            lbl = f"[{sym}]" if g != "I" else "─"
+            if pending and pending == (q, m):
+                lbl = "🔵"
+
+            if row[m + 1].button(lbl, key=f"vc_{q}_{m}"):
+                gate = st.session_state.vc_selected
+
+                if gate in TWO_QUBIT_GATES:
+                    if pending is None:
+                        st.session_state.vc_pending = (q, m)
+                    else:
+                        pq, pm = pending
+                        if pm == m and pq != q:
+                            if gate == "CNOT":
+                                grid[pq][m] = "CNOT_ctrl"
+                                grid[q][m]  = "CNOT_tgt"
+                            elif gate == "CZ":
+                                grid[min(pq,q)][m] = "CZ_ctrl"
+                                grid[max(pq,q)][m] = "CZ_tgt"
+                            elif gate == "SWAP":
+                                grid[pq][m] = "SWAP_0"
+                                grid[q][m]  = "SWAP_1"
+                            st.session_state.vc_grid = grid
+                        st.session_state.vc_pending = None
+                    st.rerun()
+
+                else:
+                    if gate == "I":
+                        grid[q][m] = "I"
+                    elif gate in ("RX", "RY", "RZ"):
+                        angle = st.session_state.get("vc_rot_angle", 1.5708)
+                        grid[q][m] = f"{gate}{angle:.4f}"
+                    elif gate == "U":
+                        th = st.session_state.get("vc_u_theta", 1.5708)
+                        ph = st.session_state.get("vc_u_phi",   0.0)
+                        la = st.session_state.get("vc_u_lam",   0.0)
+                        grid[q][m] = f"U({th:.4f},{ph:.4f},{la:.4f})"
+                    else:
+                        grid[q][m] = gate
+                    st.session_state.vc_grid = grid
+                    st.rerun()
+
+    # ── Run circuit ───────────────────────────────────────────────────────────
+    if run_visual:
+        try:
+            import pennylane as qml
+
+            dev = qml.device("default.qubit", wires=nq)
+
+            @qml.qnode(dev)
+            def vc_qnode():
+                for t in range(nm):
+                    processed = set()
+                    for q in range(nq):
+                        if q in processed:
+                            continue
+                        g = grid[q][t]
+                        if g == "I":
+                            pass
+                        elif g == "H":   qml.Hadamard(wires=q)
+                        elif g == "X":   qml.PauliX(wires=q)
+                        elif g == "Y":   qml.PauliY(wires=q)
+                        elif g == "Z":   qml.PauliZ(wires=q)
+                        elif g == "S":   qml.S(wires=q)
+                        elif g == "T":   qml.T(wires=q)
+                        elif g in ("S†", "Sdg"): qml.adjoint(qml.S)(wires=q)
+                        elif g in ("T†", "Tdg"): qml.adjoint(qml.T)(wires=q)
+                        elif g.startswith("RX"):
+                            qml.RX(float(g[2:]), wires=q)
+                        elif g.startswith("RY"):
+                            qml.RY(float(g[2:]), wires=q)
+                        elif g.startswith("RZ"):
+                            qml.RZ(float(g[2:]), wires=q)
+                        elif g.startswith("U("):
+                            params = g[2:-1].split(",")
+                            qml.U3(float(params[0]), float(params[1]), float(params[2]), wires=q)
+                        elif g == "CNOT_ctrl":
+                            tgt = next((r for r in range(nq) if r != q and grid[r][t] == "CNOT_tgt"), None)
+                            if tgt is not None:
+                                qml.CNOT(wires=[q, tgt])
+                                processed.add(tgt)
+                        elif g == "CZ_ctrl":
+                            tgt = next((r for r in range(nq) if r != q and grid[r][t] == "CZ_tgt"), None)
+                            if tgt is not None:
+                                qml.CZ(wires=[q, tgt])
+                                processed.add(tgt)
+                        elif g == "SWAP_0":
+                            tgt = next((r for r in range(nq) if r != q and grid[r][t] == "SWAP_1"), None)
+                            if tgt is not None:
+                                qml.SWAP(wires=[q, tgt])
+                                processed.add(tgt)
+                return qml.state()
+
+            state  = vc_qnode()
+            probs  = np.abs(state) ** 2
+
+            st.markdown("---")
+            st.subheader("Simulation Results")
+            lines = []
+            for i, p in enumerate(probs):
+                if p > 1e-6:
+                    bs  = format(i, f"0{nq}b")
+                    bar = "█" * round(p * 20) + "░" * (20 - round(p * 20))
+                    lines.append(f"|{bs}⟩  {bar}  {round(p * 100, 1)}%")
+            st.code("\n".join(lines) if lines else "(no significant amplitudes)", language=None)
+
+            probs_dict = {
+                format(i, f"0{nq}b"): float(p)
+                for i, p in enumerate(probs) if p > 1e-6
+            }
+            if probs_dict:
+                st.bar_chart(probs_dict)
+
+            qasm_out = circuit_to_qasm([
+                [
+                    {"I":"I","H":"H","X":"X","Y":"Y","Z":"Z","S":"S","T":"T",
+                     "S†":"S†","T†":"T†","CNOT_ctrl":"X#0","CNOT_tgt":"X#1",
+                     "CZ_ctrl":"Z#0","CZ_tgt":"Z#1","SWAP_0":"S#0","SWAP_1":"S#1"
+                    }.get(g, g if not g.startswith("U(") else "U")
+                    for g in row
+                ]
+                for row in grid
+            ])
+            with st.expander("View QASM"):
+                st.code(qasm_out, language="qasm")
+
+        except Exception as e:
+            st.error(f"Simulation error: {e}")
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("About")
@@ -326,9 +622,9 @@ with st.sidebar:
         "| Single-qubit | H, X, Y, Z, S, T, I |\n"
         "| Phase | S†, T†, P |\n"
         "| Rotation | RX, RY, RZ |\n"
-        "| Two-qubit | CNOT, CZ, CY, CH, SWAP |\n"
+        "| Two-qubit | CNOT, CZ, SWAP |\n"
         "| Controlled | CRX, CRY, CRZ |\n"
-        "| Unitary | U, U1, U2 |"
+        "| Unitary | U(θ,φ,λ) |"
     )
     st.markdown("---")
     st.markdown("**Run locally:**")
