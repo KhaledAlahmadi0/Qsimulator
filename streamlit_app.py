@@ -115,7 +115,8 @@ with tab3:
     st.subheader("Python Code Runner")
     st.markdown("Run Qiskit, Cirq, Braket, or PennyLane code.")
 
-    default_code = """\
+    EXAMPLES = {
+        "Qiskit": """\
 from qiskit import QuantumCircuit
 from qiskit_aer import AerSimulator
 
@@ -127,62 +128,134 @@ qc.measure([0, 1], [0, 1])
 simulator = AerSimulator()
 job = simulator.run(qc, shots=1024)
 result = job.result()
-counts = result.get_counts()
-print(counts)
-"""
+counts = {k[::-1]: v for k, v in result.get_counts().items()}
+print("Measurement counts:")
+for state, count in sorted(counts.items()):
+    bar = "█" * int(count / max(counts.values()) * 20)
+    print(f"  |{state}⟩  {bar}  {count}")
+""",
+        "Cirq": """\
+import cirq
 
-    code_input = st.text_area("Python Code", value=default_code, height=300)
+q0, q1 = cirq.LineQubit.range(2)
+circuit = cirq.Circuit([
+    cirq.H(q0),
+    cirq.CNOT(q0, q1),
+    cirq.measure(q0, q1, key='result')
+])
+print(circuit)
 
-    if st.button("Execute", use_container_width=True):
-        import subprocess, tempfile, json, re
+simulator = cirq.Simulator()
+result = simulator.run(circuit, repetitions=1024)
+counts = dict(result.multi_measurement_histogram(keys=['result']))
+counts = {format(k[0], '02b'): v for k, v in counts.items()}
+print("\\nMeasurement counts:")
+for state, count in sorted(counts.items()):
+    bar = "█" * int(count / max(counts.values()) * 20)
+    print(f"  |{state}⟩  {bar}  {count}")
+""",
+        "Braket": """\
+from braket.circuits import Circuit
+from braket.devices import LocalSimulator
 
-        code = code_input
-        JSON_INJECT = (
-            "\nimport json as _json"
-            "\ntry:"
-            "\n    with open('counts.json', 'w') as _f:"
-            "\n        _json.dump({str(k): int(v) for k, v in counts.items()}, _f)"
-            "\nexcept Exception:"
-            "\n    pass"
-        )
-        if any(fw in code for fw in ["qiskit", "braket", "cirq"]) and "counts" in code:
-            code += JSON_INJECT
+circuit = Circuit()
+circuit.h(0)
+circuit.cnot(0, 1)
 
-        code = re.sub(r'(?<!\w)j(?!\w)', '1j', code)
+device = LocalSimulator()
+task = device.run(circuit, shots=1024)
+result = task.result()
+counts = result.measurement_counts
+print("Measurement counts:")
+for state, count in sorted(counts.items()):
+    bar = "█" * int(count / max(counts.values()) * 20)
+    print(f"  |{state}⟩  {bar}  {count}")
+""",
+        "PennyLane": """\
+import pennylane as qml
+import numpy as np
 
-        if os.path.exists("counts.json"):
-            os.remove("counts.json")
+dev = qml.device("default.qubit", wires=2)
 
-        try:
-            with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as f:
-                f.write(code)
-                fname = f.name
+@qml.qnode(dev)
+def circuit():
+    qml.Hadamard(wires=0)
+    qml.CNOT(wires=[0, 1])
+    return qml.state()
 
-            result = subprocess.run(
-                ["python3", fname],
-                capture_output=True, text=True, timeout=50
+state = circuit()
+probs = np.abs(state) ** 2
+print("State vector:")
+for i, (amp, p) in enumerate(zip(state, probs)):
+    if p > 1e-6:
+        bs = format(i, "02b")
+        bar = "█" * round(p * 20)
+        print(f"  |{bs}⟩  {bar}  {round(p * 100, 1)}%")
+""",
+        "CUDA-Q": None,
+    }
+
+    runner_fw = st.selectbox("Framework", list(EXAMPLES.keys()), key="runner_fw")
+
+    if EXAMPLES[runner_fw] is None:
+        st.warning("CUDA-Q requires a local GPU environment with CUDA installed and cannot run on Streamlit Cloud. Generate the code below and run it locally.")
+    else:
+        if "runner_code" not in st.session_state or st.session_state.get("runner_fw_prev") != runner_fw:
+            st.session_state["runner_code"] = EXAMPLES[runner_fw]
+        st.session_state["runner_fw_prev"] = runner_fw
+
+        code_input = st.text_area("Python Code", value=EXAMPLES[runner_fw], height=300, key=f"code_{runner_fw}")
+
+        if st.button("Execute", use_container_width=True):
+            import subprocess, tempfile, json, re
+
+            code = code_input
+            JSON_INJECT = (
+                "\nimport json as _json"
+                "\ntry:"
+                "\n    with open('counts.json', 'w') as _f:"
+                "\n        _json.dump({str(k): int(v) for k, v in counts.items()}, _f)"
+                "\nexcept Exception:"
+                "\n    pass"
             )
+            if any(fw in code for fw in ["qiskit", "braket", "cirq"]) and "counts" in code:
+                code += JSON_INJECT
 
-            if result.stdout:
-                st.text("Output:")
-                st.code(result.stdout, language=None)
-            if result.stderr:
-                st.warning("Stderr:")
-                st.code(result.stderr, language=None)
-            if result.returncode != 0:
-                st.error(f"Process exited with code {result.returncode}")
+            code = re.sub(r'(?<!\w)j(?!\w)', '1j', code)
 
             if os.path.exists("counts.json"):
-                with open("counts.json") as f:
-                    counts = json.load(f)
-                st.subheader("Measurement Counts")
-                st.bar_chart(counts)
                 os.remove("counts.json")
 
-        except subprocess.TimeoutExpired:
-            st.error("Execution timed out (50s limit).")
-        except Exception as e:
-            st.error(f"Error: {e}")
+            try:
+                with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as f:
+                    f.write(code)
+                    fname = f.name
+
+                proc = subprocess.run(
+                    ["python3", fname],
+                    capture_output=True, text=True, timeout=60
+                )
+
+                if proc.stdout:
+                    st.text("Output:")
+                    st.code(proc.stdout, language=None)
+                if proc.stderr:
+                    st.warning("Stderr:")
+                    st.code(proc.stderr, language=None)
+                if proc.returncode != 0:
+                    st.error(f"Process exited with code {proc.returncode}")
+
+                if os.path.exists("counts.json"):
+                    with open("counts.json") as f:
+                        counts = json.load(f)
+                    st.subheader("Measurement Counts")
+                    st.bar_chart(counts)
+                    os.remove("counts.json")
+
+            except subprocess.TimeoutExpired:
+                st.error("Execution timed out (60s limit).")
+            except Exception as e:
+                st.error(f"Error: {e}")
 
 # ── Tab 4: Generate Code ──────────────────────────────────────────────────────
 with tab4:

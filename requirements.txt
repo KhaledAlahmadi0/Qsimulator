@@ -7,3 +7,5 @@ pennylane-qiskit
 requests
 qiskit
 qiskit-aer
+cirq
+amazon-braket-sdk
