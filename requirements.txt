@@ -1,0 +1,6 @@
+streamlit
+numpy
+flask
+flask-cors
+pennylane
+requests

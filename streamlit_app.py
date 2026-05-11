@@ -1,8 +1,21 @@
-import streamlit as st
-import requests
-import json
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "backend"))
 
-API_URL = "http://localhost:7900"
+import streamlit as st
+import numpy as np
+
+from backend import (
+    parse_circuit,
+    apply_circuit,
+    format_output,
+    circuit_to_qasm,
+    _gen_qiskit,
+    _gen_cirq,
+    _gen_braket,
+    _gen_cudaq,
+    _gen_pennylane,
+)
 
 st.set_page_config(page_title="Quantum Circuit Simulator", layout="wide")
 st.title("Quantum Circuit Simulator")
@@ -26,35 +39,54 @@ with tab1:
     with col1:
         if st.button("Run (Custom Simulator)", use_container_width=True):
             try:
-                res = requests.post(f"{API_URL}/compute", data=circuit_input, timeout=30)
-                if res.ok:
-                    st.text("Results:")
-                    st.code(res.text, language=None)
-                else:
-                    st.error(f"Error {res.status_code}: {res.text}")
-            except requests.exceptions.ConnectionError:
-                st.error("Cannot reach backend. Make sure Flask is running on port 7900.")
+                circuit = parse_circuit(circuit_input)
+                final_state = apply_circuit(circuit)
+                report = format_output(final_state)
+                st.text("Results:")
+                st.code(report, language=None)
+            except Exception as e:
+                st.error(f"Simulation error: {e}")
 
     with col2:
-        if st.button("Run (PennyLane via QASM)", use_container_width=True):
+        if st.button("Run (PennyLane)", use_container_width=True):
             try:
-                # First generate QASM from the circuit
-                qasm_res = requests.post(f"{API_URL}/QASM", data=circuit_input, timeout=30)
-                if not qasm_res.ok:
-                    st.error(f"QASM generation failed: {qasm_res.text}")
-                else:
-                    # Then simulate with PennyLane
-                    pl_res = requests.post(f"{API_URL}/simulate-pennylane", json={}, timeout=30)
-                    if pl_res.ok:
-                        data = pl_res.json()
-                        st.text("PennyLane Results:")
-                        st.code(data.get("stdout", ""), language=None)
-                        if "probs" in data:
-                            st.bar_chart(data["probs"])
-                    else:
-                        st.error(f"Error {pl_res.status_code}: {pl_res.text}")
-            except requests.exceptions.ConnectionError:
-                st.error("Cannot reach backend. Make sure Flask is running on port 7900.")
+                import pennylane as qml
+                import re
+
+                circuit = parse_circuit(circuit_input)
+                qasm_text = circuit_to_qasm(circuit)
+                qasm_clean = re.sub(r"(?mi)^\s*measure\b.*;$", "", qasm_text)
+                num_wires = len(circuit)
+
+                circuit_fn = qml.from_qasm(qasm_clean)
+                dev = qml.device("default.qubit", wires=num_wires)
+
+                @qml.qnode(dev)
+                def qnode():
+                    circuit_fn()
+                    return qml.state()
+
+                state = qnode()
+                probs = np.abs(state) ** 2
+
+                st.text("PennyLane Results:")
+                lines = []
+                for i, (amp, p) in enumerate(zip(state, probs)):
+                    if p > 1e-6:
+                        bs = format(i, f"0{num_wires}b")
+                        bar = "█" * round(p * 20) + "░" * (20 - round(p * 20))
+                        lines.append(f"|{bs}⟩  {bar}  {round(p * 100, 1)}%")
+                st.code("\n".join(lines), language=None)
+
+                probs_dict = {
+                    format(i, f"0{num_wires}b"): float(p)
+                    for i, p in enumerate(probs) if p > 1e-6
+                }
+                if probs_dict:
+                    st.bar_chart(probs_dict)
+
+            except Exception as e:
+                st.error(f"PennyLane error: {e}")
 
 # ── Tab 2: QASM ───────────────────────────────────────────────────────────────
 with tab2:
@@ -70,14 +102,12 @@ with tab2:
 
     if st.button("Generate QASM", use_container_width=True):
         try:
-            res = requests.post(f"{API_URL}/QASM", data=qasm_circuit, timeout=30)
-            if res.ok:
-                st.text("OpenQASM 2.0 Output:")
-                st.code(res.text, language="qasm")
-            else:
-                st.error(f"Error {res.status_code}: {res.text}")
-        except requests.exceptions.ConnectionError:
-            st.error("Cannot reach backend. Make sure Flask is running on port 7900.")
+            circuit = parse_circuit(qasm_circuit)
+            qasm_code = circuit_to_qasm(circuit)
+            st.text("OpenQASM 2.0 Output:")
+            st.code(qasm_code, language="qasm")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 # ── Tab 3: Code Runner ────────────────────────────────────────────────────────
 with tab3:
@@ -103,25 +133,55 @@ print(counts)
     code_input = st.text_area("Python Code", value=default_code, height=300)
 
     if st.button("Execute", use_container_width=True):
+        import subprocess, tempfile, json, re
+
+        code = code_input
+        JSON_INJECT = (
+            "\nimport json as _json"
+            "\ntry:"
+            "\n    with open('counts.json', 'w') as _f:"
+            "\n        _json.dump({str(k): int(v) for k, v in counts.items()}, _f)"
+            "\nexcept Exception:"
+            "\n    pass"
+        )
+        if any(fw in code for fw in ["qiskit", "braket", "cirq"]) and "counts" in code:
+            code += JSON_INJECT
+
+        code = re.sub(r'(?<!\w)j(?!\w)', '1j', code)
+
+        if os.path.exists("counts.json"):
+            os.remove("counts.json")
+
         try:
-            res = requests.post(f"{API_URL}/execute-python", json={"code": code_input}, timeout=60)
-            if res.ok:
-                data = res.json()
-                if data.get("stdout"):
-                    st.text("Output:")
-                    st.code(data["stdout"], language=None)
-                if data.get("stderr"):
-                    st.warning("Stderr:")
-                    st.code(data["stderr"], language=None)
-                if data.get("counts"):
-                    st.subheader("Measurement Counts")
-                    st.bar_chart(data["counts"])
-                if data.get("returncode", 0) != 0:
-                    st.error(f"Process exited with code {data['returncode']}")
-            else:
-                st.error(f"Error {res.status_code}: {res.text}")
-        except requests.exceptions.ConnectionError:
-            st.error("Cannot reach backend. Make sure Flask is running on port 7900.")
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".py", delete=False) as f:
+                f.write(code)
+                fname = f.name
+
+            result = subprocess.run(
+                ["python3", fname],
+                capture_output=True, text=True, timeout=50
+            )
+
+            if result.stdout:
+                st.text("Output:")
+                st.code(result.stdout, language=None)
+            if result.stderr:
+                st.warning("Stderr:")
+                st.code(result.stderr, language=None)
+            if result.returncode != 0:
+                st.error(f"Process exited with code {result.returncode}")
+
+            if os.path.exists("counts.json"):
+                with open("counts.json") as f:
+                    counts = json.load(f)
+                st.subheader("Measurement Counts")
+                st.bar_chart(counts)
+                os.remove("counts.json")
+
+        except subprocess.TimeoutExpired:
+            st.error("Execution timed out (50s limit).")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 # ── Tab 4: Generate Code ──────────────────────────────────────────────────────
 with tab4:
@@ -140,37 +200,27 @@ with tab4:
         ["qiskit", "cirq", "braket", "cudaq", "pennylane"]
     )
 
+    generators = {
+        "qiskit":    _gen_qiskit,
+        "cirq":      _gen_cirq,
+        "braket":    _gen_braket,
+        "cudaq":     _gen_cudaq,
+        "pennylane": _gen_pennylane,
+    }
+
     if st.button("Generate Code", use_container_width=True):
         try:
-            res = requests.post(
-                f"{API_URL}/generate-code",
-                json={"qasm": qasm_for_gen, "format": framework},
-                timeout=30
-            )
-            if res.ok:
-                data = res.json()
-                st.text(f"Generated {framework.capitalize()} Code:")
-                st.code(data.get("code", ""), language="python")
-            else:
-                st.error(f"Error {res.status_code}: {res.text}")
-        except requests.exceptions.ConnectionError:
-            st.error("Cannot reach backend. Make sure Flask is running on port 7900.")
+            code = generators[framework](qasm_for_gen)
+            st.text(f"Generated {framework.capitalize()} Code:")
+            st.code(code, language="python")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
-# ── Sidebar: health check ─────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("Backend Status")
-    if st.button("Check Connection"):
-        try:
-            res = requests.get(f"{API_URL}/health", timeout=5)
-            if res.ok:
-                st.success("Backend is running")
-            else:
-                st.error(f"Backend returned {res.status_code}")
-        except requests.exceptions.ConnectionError:
-            st.error("Backend offline")
-
+    st.header("About")
+    st.markdown("Quantum Circuit Simulator — COE619")
+    st.markdown("Supports: H, X, Y, Z, T, S, CNOT, SWAP, RX/RY/RZ, CRX/CRY/CRZ, Unitary gates")
     st.markdown("---")
-    st.markdown("**Run the Flask backend:**")
-    st.code("python backend/backend.py", language="bash")
-    st.markdown("**Run this Streamlit app:**")
+    st.markdown("**Run locally:**")
     st.code("streamlit run streamlit_app.py", language="bash")
