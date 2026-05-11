@@ -249,7 +249,7 @@ for i, (amp, p) in enumerate(zip(state, probs)):
                     fname = f.name
 
                 proc = subprocess.run(
-                    ["python3", fname],
+                    [sys.executable, fname],
                     capture_output=True, text=True, timeout=60
                 )
 
