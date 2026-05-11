@@ -3,4 +3,7 @@ numpy
 flask
 flask-cors
 pennylane
+pennylane-qiskit
 requests
+qiskit
+qiskit-aer

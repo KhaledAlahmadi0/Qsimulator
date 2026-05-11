@@ -51,27 +51,28 @@ with tab1:
         if st.button("Run (PennyLane)", use_container_width=True):
             try:
                 import pennylane as qml
-                import re
 
                 circuit = parse_circuit(circuit_input)
-                qasm_text = circuit_to_qasm(circuit)
-                qasm_clean = re.sub(r"(?mi)^\s*measure\b.*;$", "", qasm_text)
                 num_wires = len(circuit)
 
-                circuit_fn = qml.from_qasm(qasm_clean)
+                # Get state vector via the native backend simulator
+                state = apply_circuit(circuit)
+                probs = np.abs(state) ** 2
+
+                # Wrap in a PennyLane QubitStateVector circuit to get qml.state()
                 dev = qml.device("default.qubit", wires=num_wires)
 
                 @qml.qnode(dev)
                 def qnode():
-                    circuit_fn()
+                    qml.StatePrep(state, wires=range(num_wires))
                     return qml.state()
 
-                state = qnode()
-                probs = np.abs(state) ** 2
+                pl_state = qnode()
+                pl_probs = np.abs(pl_state) ** 2
 
                 st.text("PennyLane Results:")
                 lines = []
-                for i, (amp, p) in enumerate(zip(state, probs)):
+                for i, p in enumerate(pl_probs):
                     if p > 1e-6:
                         bs = format(i, f"0{num_wires}b")
                         bar = "█" * round(p * 20) + "░" * (20 - round(p * 20))
@@ -80,7 +81,7 @@ with tab1:
 
                 probs_dict = {
                     format(i, f"0{num_wires}b"): float(p)
-                    for i, p in enumerate(probs) if p > 1e-6
+                    for i, p in enumerate(pl_probs) if p > 1e-6
                 }
                 if probs_dict:
                     st.bar_chart(probs_dict)
